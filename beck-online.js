@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2025-07-09 13:33:45"
+	"lastUpdated": "2026-09-16 11:30:00"
 }
 
 /*
@@ -371,6 +371,12 @@ function scrapeCase(doc, url) {
 		item.docketNumber = alternativeData[4];
 	}
 	
+	// ECLI from the metadata table, e.g. "ECLI:DE:BGH:2014:150514XBZB7113.0"
+	var ecliMatch = doc.body.textContent.match(/ECLI:\s*[A-Za-z]{2}:[^:\s]{1,7}:\d{4}:[^:\s]{1,25}/i);
+	if (ecliMatch) {
+		item.DOI = ecliMatch[0].replace(/\s+/g, '');
+	}
+	
 	item.title = item.court + ", " + decisionDateStr + " - " + item.docketNumber;
 	if (item.shortTitle) {
 		item.title += " - " + item.shortTitle;
@@ -399,19 +405,24 @@ function scrapeCase(doc, url) {
 	
 	// code to scrape the BeckRS source, if available
 	// example: BeckRS 2013, 06445
-	// Since BeckRS is not suitable for citing, let's push it into the notes instead
 	var beckRSline = ZU.xpathText(doc, '//span[@class="fundstelle"]');
-	if (beckRSline) {
-		note = addNote(note, "<h3>Fundstelle</h3><p>" + ZU.trimInternal(beckRSline) + "</p>");
-		
-		/* commented out, because we cannot use it for the CSL-stylesheet at the moment.
-		 * If we find a better solution later, we can reactivate this code and save the
-		 * information properly
-		 *
-		var beckRSsrc = beckRSline.match(/^([^,]+)\s(\d{4})\s*,\s*(\d+)/);
+	var beckRSsrc = beckRSline && beckRSline.match(/^([^,]+)\s(\d{4})\s*,\s*(\d+)/);
+	if (!beckRSsrc) {
+		// fall back to the citation in the URL,
+		// e.g. vpath=bibdata/ents/beckrs/2022/cont/beckrs.2022.3546.htm
+		var beckRSurl = url.match(/ents(?:%2F|\/)beckrs(?:%2F|\/)\d{4}(?:%2F|\/)cont(?:%2F|\/)beckrs\.(\d{4})\.(\d+)\.htm/i);
+		if (beckRSurl) {
+			beckRSsrc = ["BeckRS " + beckRSurl[1] + ", " + beckRSurl[2], "BeckRS", beckRSurl[1], beckRSurl[2]];
+		}
+	}
+	if (beckRSsrc) {
 		item.reporter = beckRSsrc[1];
-		item.date = beckRSsrc[2];
-		item.pages = beckRSsrc[3];*/
+		item.reporterVolume = beckRSsrc[2];
+		item.firstPage = beckRSsrc[3];
+	}
+	else if (beckRSline) {
+		// Fundstelle that we could not parse — keep it in the notes
+		note = addNote(note, "<h3>Fundstelle</h3><p>" + ZU.trimInternal(beckRSline) + "</p>");
 	}
 
 	var otherCitationsText = ZU.xpathText(doc, '//div[@id="parallelfundstellenNachDokument"]');
@@ -994,6 +1005,9 @@ var testCases = [
 				"court": "OLG Köln",
 				"docketNumber": "6 U 67/11",
 				"extra": "Jurisdiction: de\nGenre: Urt.",
+				"firstPage": "9546",
+				"reporter": "BeckRS",
+				"reporterVolume": "2012",
 				"url": "https://beck-online.beck.de/Bcid/Y-300-Z-BECKRS-B-2012-N-09546",
 				"attachments": [
 					{
@@ -1003,7 +1017,7 @@ var testCases = [
 				"tags": [],
 				"notes": [
 					{
-						"note": "<h2>Additional Metadata</h2><h3>Fundstelle</h3><p>BeckRS 2012, 9546</p><h3>Parallelfundstellen</h3><p>Parallelfundstellen: Entscheidungen:MMR 2012, 387 (m. Anm. Hoffmann) ◊NJOZ 2013, 365 ◊ZUM 2012, 697 ◊LSK 2012, 250148 (Ls.) Entscheidungsbesprechung:GRUR-Prax 2012, 238 (Dr. Christian Dietrich) Weitere Fundstellen:CR 2012, 397 ◊K & R 2012, 437 (Ls.) ◊MD 2012, 621 ◊WRP 2012, 1007</p><h3>Normen</h3><p>Normenketten: BGB § BGB § 683 S. 1, § 670, § 832 Abs. 1 UrhG § URHG § 19a, § 97 Abs. 2</p>"
+						"note": "<h2>Additional Metadata</h2><h3>Parallelfundstellen</h3><p>Parallelfundstellen: Entscheidungen:MMR 2012, 387 (m. Anm. Hoffmann) ◊NJOZ 2013, 365 ◊ZUM 2012, 697 ◊LSK 2012, 250148 (Ls.) Entscheidungsbesprechung:GRUR-Prax 2012, 238 (Dr. Christian Dietrich) Weitere Fundstellen:CR 2012, 397 ◊K & R 2012, 437 (Ls.) ◊MD 2012, 621 ◊WRP 2012, 1007</p><h3>Normen</h3><p>Normenketten: BGB § BGB § 683 S. 1, § 670, § 832 Abs. 1 UrhG § URHG § 19a, § 97 Abs. 2</p>"
 					}
 				],
 				"seeAlso": []

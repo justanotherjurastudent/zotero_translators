@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2017-01-16 20:00:51"
+	"lastUpdated": "2026-09-15 10:30:00"
 }
 
 /*
@@ -110,6 +110,12 @@ function scrape(doc, url, type) {
 		
 		var previousDecisions = ZU.xpath(doc, './/div[h4[contains(., "Verfahrensgang")]]/ul/li');
 		item.history = previousDecisions.map(function(li) { return li.textContent; } ).join("; ");
+		
+		// ECLI from the decision page, e.g. "ECLI:DE:BGH:2014:150514XBZB7113.0" (doc.body only exists on the detail page, not in multiple mode)
+		var ecliMatch = doc.body && doc.body.textContent.match(/ECLI:\s*[A-Za-z]{2}:[^:\s]{1,7}:\d{4}:[^:\s]{1,25}/i);
+		if (ecliMatch) {
+			item.DOI = ecliMatch[0].replace(/\s+/g, '');
+		}
 		
 	}
 	if (type == "statute") {
