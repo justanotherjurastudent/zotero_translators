@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2026-09-16 11:30:00"
+	"lastUpdated": "2026-09-19 00:30:00"
 }
 
 /*
@@ -593,11 +593,49 @@ function scrape(doc, url) {
 	finalize(doc, url, item);
 }
 
+// build the URLs of the export buttons of the Druck- und Export-Manager:
+// a GET form whose hidden inputs carry the document path (vpath); the
+// submit button contributes exportFormat, and the checked "options"
+// checkboxes are submitted after it. without them the server returns
+// the ordinary document view instead of the export
+function buildExportUrls(doc, url) {
+	var htmlButton = doc.getElementById('htmlExportButton');
+	var pdfButton = doc.getElementById('pdfExportButton');
+	var anchor = (htmlButton && htmlButton.getAttribute('formaction')) ? htmlButton : pdfButton;
+	if (!anchor || !anchor.form || !anchor.getAttribute('formaction')) {
+		return null;
+	}
+	var origin = url.match(/^https?:\/\/[^/]+/);
+	if (!origin) {
+		return null;
+	}
+	var parts = [];
+	var inputs = anchor.form.querySelectorAll('input[type="hidden"]');
+	for (var i = 0; i < inputs.length; i++) {
+		var value = inputs[i].value;
+		// the site's JS only fills the timezone when the form is submitted
+		if (inputs[i].name == 'timezone' && !value) {
+			try {
+				value = Intl.DateTimeFormat().resolvedOptions().timeZone;
+			}
+			catch (e) {}
+		}
+		parts.push(encodeURIComponent(inputs[i].name) + '=' + encodeURIComponent(value || ''));
+	}
+	var base = origin[0] + anchor.getAttribute('formaction') + '?' + parts.join('&');
+	var options = '';
+	var checked = anchor.form.querySelectorAll('input[type="checkbox"][name="options"]:checked');
+	for (var j = 0; j < checked.length; j++) {
+		options += '&options=' + encodeURIComponent(checked[j].value);
+	}
+	return {
+		html: htmlButton ? base + '&exportFormat=html' + options : null,
+		pdf: pdfButton ? base + '&exportFormat=pdf' + options : null
+	};
+}
+
 function finalize(doc, url, item) {
-	item.attachments = [{
-		title: "Snapshot",
-		document: doc
-	}];
+	item.attachments = [];
 	
 	var perma = attr(doc, '.doc-link > a', 'href');
 	if (perma) {
@@ -622,9 +660,28 @@ function finalize(doc, url, item) {
 		item.url = url;
 	}
 	
+	var urls = buildExportUrls(doc, url);
+	// the connector discards translator text/html attachments and captures the
+	// live page via SingleFile instead, which includes the site header. but
+	// attachments without a mimeType are downloaded as-is and accepted with
+	// whatever content type the server returns, so push the site's own HTML
+	// export undeclared - it is saved as a text/html snapshot
+	if (urls && urls.html) {
+		item.attachments.push({
+			title: "Snapshot",
+			url: urls.html
+		});
+	}
+	if (urls && urls.pdf) {
+		item.attachments.push({
+			title: "Fulltext PDF",
+			url: urls.pdf,
+			mimeType: "application/pdf"
+		});
+	}
+	
 	item.complete();
 }
-
 /** BEGIN TEST CASES **/
 var testCases = [
 	{
@@ -651,6 +708,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -680,6 +741,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -727,6 +792,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -770,6 +839,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -808,6 +881,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -841,6 +918,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -873,6 +954,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -911,6 +996,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -941,6 +1030,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -984,6 +1077,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -1012,6 +1109,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -1044,6 +1145,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -1077,6 +1182,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -1121,6 +1230,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -1166,6 +1279,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
@@ -1201,6 +1318,10 @@ var testCases = [
 				"attachments": [
 					{
 						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
 					}
 				],
 				"tags": [],
