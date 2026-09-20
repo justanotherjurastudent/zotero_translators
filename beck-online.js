@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2026-09-19 00:30:00"
+	"lastUpdated": "2026-09-19 01:00:00"
 }
 
 /*
@@ -181,7 +181,17 @@ function scrapeKommentar(doc, url) {
 	
 	var editionText = ZU.xpathText(doc, '//div[@class="dk2"]//span[@class="citation"]/text()[preceding-sibling::br]');
 	if (editionText) {
-		if (editionText.search(/\d+/) > -1) {
+		// e.g. "GesamtHrsg: Gsell/Krüger/Lorenz/Reymann Hrsg: Brückner Stand:" -
+		// the GesamtHrsg names are the encyclopedia's editors, the volume
+		// editor (Hrsg) is ignored and there is no edition
+		var gesamtHrsg = editionText.match(/GesamtHrsg:\s*(.+?)(?:\s+Hrsg:|\s+Stand\b|\s*$)/);
+		if (gesamtHrsg) {
+			var gesamtHrsgEditors = gesamtHrsg[1].split("/");
+			for (let i = 0; i < gesamtHrsgEditors.length; i++) {
+				item.creators.push(ZU.cleanAuthor(ZU.trimInternal(gesamtHrsgEditors[i]), 'editor', false));
+			}
+		}
+		else if (editionText.search(/\d+/) > -1) {
 			item.edition = editionText.match(/\d+/)[0];
 		}
 		else {
@@ -189,7 +199,7 @@ function scrapeKommentar(doc, url) {
 		}
 	}
 	item.date = ZU.xpathText(doc, '//div[@class="dk2"]//span[@class="stand"]');
-	if (!item.date && editionText.match(/\d{4}$/)) {
+	if (!item.date && editionText && editionText.match(/\d{4}$/)) {
 		item.date = editionText.match(/\d{4}$/)[0];
 	}
 
@@ -1227,6 +1237,59 @@ var testCases = [
 				"encyclopediaTitle": "Beck'scher Online-Kommentar BGB",
 				"libraryCatalog": "beck-online",
 				"url": "https://beck-online.beck.de/Bcid/Y-400-W-beckok-G-BGB-P-489",
+				"attachments": [
+					{
+						"title": "Snapshot"
+					},
+					{
+						"title": "Fulltext PDF",
+						"mimeType": "application/pdf"
+					}
+				],
+				"tags": [],
+				"notes": [],
+				"seeAlso": []
+			}
+		]
+	},
+	{
+		"type": "web",
+		"url": "https://beck-online.beck.de/?vpath=bibdata%2Fkomm%2FBeckOGK_64_BandBGB%2FBGB%2Fcont%2FBECKOGK%2eBGB%2eP442%2eglA%2eglIII%2egl2%2ehtm",
+		"items": [
+			{
+				"itemType": "encyclopediaArticle",
+				"title": "BGB § 442 Kenntnis des Käufers",
+				"creators": [
+					{
+						"firstName": "",
+						"lastName": "Stöber",
+						"creatorType": "author"
+					},
+					{
+						"firstName": "",
+						"lastName": "Gsell",
+						"creatorType": "editor"
+					},
+					{
+						"firstName": "",
+						"lastName": "Krüger",
+						"creatorType": "editor"
+					},
+					{
+						"firstName": "",
+						"lastName": "Lorenz",
+						"creatorType": "editor"
+					},
+					{
+						"firstName": "",
+						"lastName": "Reymann",
+						"creatorType": "editor"
+					}
+				],
+				"date": "01.02.2026",
+				"encyclopediaTitle": "beck-online.GROSSKOMMENTAR",
+				"libraryCatalog": "beck-online",
+				"url": "https://beck-online.beck.de/Bcid/Y-400-W-BECKOGK-G-BGB-P-442-Gl-A-III-2",
 				"attachments": [
 					{
 						"title": "Snapshot"
