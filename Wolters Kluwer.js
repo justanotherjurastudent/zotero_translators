@@ -36,10 +36,6 @@
 */
 
 
-// Fallback case-number regex from Jura-Links (https://github.com/justanotherjurastudent/Jura-Links/blob/master/src/utils/regex.ts)
-var DOCKET_FALLBACK_RE = /(?:[A-Za-z]-\d+\/\d{2}\b|[A-Za-z]\s*\d+\s*[A-Za-z]{1,3}(?:\s*\([A-Za-z]+\))?\s*\d+\s*[A-Za-z]{0,3}\s*\d+\/\d{2}\b(?:\s*(?:\([A-Za-z]+\)|[A-Za-z]))?|\d+[A-Za-z]?\s*[A-Za-z]{1,3}(?:\s*\([A-Za-z]+\))?\s*\d+\s*[A-Za-z]{0,3}\s*\d+\/\d{2}\b(?:\s*(?:\([A-Za-z]+\)|[A-Za-z]))?|[IVXLCDM]+\s*[A-Za-z]{1,3}(?:\s*\([A-Za-z]+\))?\s*\d+\s*[A-Za-z]{0,3}\s*\d+\/\d{2}\b(?:\s*(?:\([A-Za-z]+\)|[A-Za-z]))?|[A-Za-z]?\d{1,7}\/\d{2}\b)(?![^[]*\])/g;
-
-
 function detectWeb(doc, url) {
 	if (!/\/document\//.test(url)) return false;
 	var container = getContainer(doc);
@@ -98,39 +94,25 @@ async function scrape(doc, url = doc.location.href) {
 			item.dateDecided = baseInfo.dateDecided;
 			// display form for the citation caseName
 			var isoParts = baseInfo.dateDecided.split('-');
-			if (isoParts.length == 3) dateDisplay = ('0' + isoParts[2]).slice(-2) + '.' + ('0' + isoParts[1]).slice(-2) + '.' + isoParts[0];
+			if (isoParts.length == 3) dateDisplay = two(isoParts[2]) + '.' + two(isoParts[1]) + '.' + isoParts[0];
 		}
 		else if (biblio['Datum']) {
 			var biblioDate = biblio['Datum'].match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
 			if (biblioDate) {
-				dateDisplay = ('0' + biblioDate[1]).slice(-2) + '.' + ('0' + biblioDate[2]).slice(-2) + '.' + biblioDate[3];
-				item.dateDecided = biblioDate[3] + '-' + ('0' + biblioDate[2]).slice(-2) + '-' + ('0' + biblioDate[1]).slice(-2);
+				dateDisplay = two(biblioDate[1]) + '.' + two(biblioDate[2]) + '.' + biblioDate[3];
+				item.dateDecided = biblioDate[3] + '-' + two(biblioDate[2]) + '-' + two(biblioDate[1]);
 			}
 		}
 		else {
 			var dateMatch = documentTitle.match(/\bv(?:om|\.)\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i);
 			if (dateMatch) {
-				dateDisplay = ('0' + dateMatch[1]).slice(-2) + '.' + ('0' + dateMatch[2]).slice(-2) + '.' + dateMatch[3];
-				item.dateDecided = dateMatch[3] + '-' + ('0' + dateMatch[2]).slice(-2) + '-' + ('0' + dateMatch[1]).slice(-2);
+				dateDisplay = two(dateMatch[1]) + '.' + two(dateMatch[2]) + '.' + dateMatch[3];
+				item.dateDecided = dateMatch[3] + '-' + two(dateMatch[2]) + '-' + two(dateMatch[1]);
 			}
 		}
 		var docket = baseInfo && baseInfo.docket ? baseInfo.docket : '';
-		if (!docket) {
-			if (biblio['Aktenzeichen']) {
-				docket = ZU.trimInternal(biblio['Aktenzeichen']);
-			}
-			else {
-				var docketMatch = documentTitle.match(/Az\.?:?\s*(.+)$/);
-				if (docketMatch) {
-					docket = ZU.trimInternal(docketMatch[1]);
-				}
-				else {
-					// fallback: Jura-Links case-number regex
-					var docketList = documentTitle.match(DOCKET_FALLBACK_RE);
-					if (docketList) docket = docketList[0];
-				}
-			}
-		}
+		if (!docket && biblio['Aktenzeichen']) docket = ZU.trimInternal(biblio['Aktenzeichen']);
+		if (!docket) docket = extractDocketFromTitle(documentTitle);
 		if (docket) item.docketNumber = docket;
 		if (biblio['Entscheidungsform']) item.extra = biblio['Entscheidungsform'];
 		// Z2: Zotero maps item.title to caseName — the headline is the title, and the
@@ -276,65 +258,7 @@ async function scrape(doc, url = doc.location.href) {
 	item.url = url;
 
 	// snapshot: prefer the site's HTML export, fall back to the live page
-	var attachment = null;
-	var csrfMeta = doc.querySelector('meta[name="csrf-token"]');
-	var csrf = csrfMeta ? csrfMeta.getAttribute('content') : '';
-	if (documentId && csrf && doc.defaultView) {
-		try {
-			var sanitized = (documentTitle || 'document').replace(/[\\/:*?"<>|]/g, '-');
-			var exportBody = JSON.stringify([
-				{
-					data: {
-						documentIds: [documentId],
-						searchId: ''
-					},
-					options: {
-						isLandscape: false,
-						displayHighlights: false,
-						displayLinks: false,
-						displayNotes: false,
-						displayTextMarks: false,
-						displayOverviewItems: false,
-						format: 'html'
-					},
-					filename: sanitized,
-					progressId: ''
-				},
-				'Document',
-				sanitized
-			]);
-			var response = await request('https://research.wolterskluwer-online.de/edge/print-export/export', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'X-Request-Source': 'fetch' },
-				body: exportBody
-			});
-			var exportHtml = response && response.body ? response.body : '';
-			if (ZU.trimInternal(exportHtml).charAt(0) == '<') {
-				var bytes = new TextEncoder().encode(exportHtml);
-				var binary = '';
-				for (var b = 0; b < bytes.length; b += 8192) {
-					binary += String.fromCharCode.apply(null, bytes.subarray(b, b + 8192));
-				}
-				// Use RFC 2047 encoded MIME type (=?utf-8?B?dGV4dC9odG1s?=).
-				// In the connector, it bypasses the SingleFile interception (=== 'text/html').
-				// In Zotero Standalone, the HTTP server decodes RFC 2047 headers so the attachment
-				// is imported as text/html with full Reader and snapshot preview support.
-				attachment = {
-					title: snapshotTitle || 'Snapshot',
-					url: url,
-					mimeType: '=?utf-8?B?dGV4dC9odG1s?=',
-					data: btoa(binary)
-				};
-				Zotero.debug('Wolters Kluwer: export received, ' + exportHtml.length + ' chars');
-			}
-			else {
-				Zotero.debug('Wolters Kluwer: export response unusable: ' + exportHtml.slice(0, 300));
-			}
-		}
-		catch (e) {
-			Zotero.debug('Wolters Kluwer: export POST failed: ' + (e.status || '') + ' ' + (e.value || e.message || e));
-		}
-	}
+	var attachment = await fetchExportAttachment(doc, documentId, documentTitle, url);
 	if (attachment) {
 		item.attachments.push(attachment);
 	}
@@ -342,6 +266,67 @@ async function scrape(doc, url = doc.location.href) {
 		item.attachments.push({ title: snapshotTitle || 'Snapshot', document: doc });
 	}
 	await item.complete();
+}
+
+// snapshot: post to the site's print-export endpoint for full HTML (needs a CSRF token)
+async function fetchExportAttachment(doc, documentId, documentTitle, url) {
+	var csrfMeta = doc.querySelector('meta[name="csrf-token"]');
+	var csrf = csrfMeta ? csrfMeta.getAttribute('content') : '';
+	if (!documentId || !csrf || !doc.defaultView) return null;
+	try {
+		var sanitized = (documentTitle || 'document').replace(/[\\/:*?"<>|]/g, '-');
+		var exportBody = JSON.stringify([
+			{
+				data: {
+					documentIds: [documentId],
+					searchId: ''
+				},
+				options: {
+					isLandscape: false,
+					displayHighlights: false,
+					displayLinks: false,
+					displayNotes: false,
+					displayTextMarks: false,
+					displayOverviewItems: false,
+					format: 'html'
+				},
+				filename: sanitized,
+				progressId: ''
+			},
+			'Document',
+			sanitized
+		]);
+		var response = await request('https://research.wolterskluwer-online.de/edge/print-export/export', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf, 'X-Request-Source': 'fetch' },
+			body: exportBody
+		});
+		var exportHtml = response && response.body ? response.body : '';
+		if (ZU.trimInternal(exportHtml).charAt(0) != '<') {
+			Zotero.debug('Wolters Kluwer: export response unusable: ' + exportHtml.slice(0, 300));
+			return null;
+		}
+		var bytes = new TextEncoder().encode(exportHtml);
+		var binary = '';
+		for (var b = 0; b < bytes.length; b += 8192) {
+			binary += String.fromCharCode.apply(null, bytes.subarray(b, b + 8192));
+		}
+		// Use RFC 2047 encoded MIME type (=?utf-8?B?dGV4dC9odG1s?=).
+		// In the connector, it bypasses the SingleFile interception (=== 'text/html').
+		// In Zotero Standalone, the HTTP server decodes RFC 2047 headers so the attachment
+		// is imported as text/html with full Reader and snapshot preview support.
+		Zotero.debug('Wolters Kluwer: export received, ' + exportHtml.length + ' chars');
+		return {
+			title: documentTitle || 'Snapshot',
+			url: url,
+			mimeType: '=?utf-8?B?dGV4dC9odG1s?=',
+			data: btoa(binary)
+		};
+	}
+	catch (e) {
+		Zotero.debug('Wolters Kluwer: export POST failed: ' + (e.status || '') + ' ' + (e.value || e.message || e));
+		return null;
+	}
 }
 
 // label → value map over the bibliography panel; handles both markup variants
@@ -412,6 +397,18 @@ function getType(container, biblio) {
 	return false;
 }
 
+// Fallback case-number regex from Jura-Links (https://github.com/justanotherjurastudent/Jura-Links/blob/master/src/utils/regex.ts)
+var DOCKET_FALLBACK_RE = /(?:[A-Za-z]-\d+\/\d{2}\b|[A-Za-z]\s*\d+\s*[A-Za-z]{1,3}(?:\s*\([A-Za-z]+\))?\s*\d+\s*[A-Za-z]{0,3}\s*\d+\/\d{2}\b(?:\s*(?:\([A-Za-z]+\)|[A-Za-z]))?|\d+[A-Za-z]?\s*[A-Za-z]{1,3}(?:\s*\([A-Za-z]+\))?\s*\d+\s*[A-Za-z]{0,3}\s*\d+\/\d{2}\b(?:\s*(?:\([A-Za-z]+\)|[A-Za-z]))?|[IVXLCDM]+\s*[A-Za-z]{1,3}(?:\s*\([A-Za-z]+\))?\s*\d+\s*[A-Za-z]{0,3}\s*\d+\/\d{2}\b(?:\s*(?:\([A-Za-z]+\)|[A-Za-z]))?|[A-Za-z]?\d{1,7}\/\d{2}\b)(?![^[]*\])/g;
+
+// docket from the document title: "Az.:" label, else a bare case-number pattern
+function extractDocketFromTitle(title) {
+	if (!title) return '';
+	var docketMatch = title.match(/Az\.?:?\s*(.+)$/);
+	if (docketMatch) return ZU.trimInternal(docketMatch[1]);
+	var docketList = title.match(DOCKET_FALLBACK_RE);
+	return docketList ? docketList[0] : '';
+}
+
 // Z2: "Nieders. OVG, Urt. v. 09.03.2026 – 1 KN 40/22" → court / dateDecided / docket
 function parseBaseDocumentLink(doc) {
 	var el = doc.querySelector('.base_document_link');
@@ -430,7 +427,7 @@ function parseBaseDocumentLink(doc) {
 	};
 	var dateMatch = text.match(/\bv(?:om|\.)\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i);
 	if (dateMatch) {
-		info.dateDecided = dateMatch[3] + '-' + ('0' + dateMatch[2]).slice(-2) + '-' + ('0' + dateMatch[1]).slice(-2);
+		info.dateDecided = dateMatch[3] + '-' + two(dateMatch[2]) + '-' + two(dateMatch[1]);
 	}
 	// the docket follows the spaced dash
 	var dashMatch = text.match(/\s[–—-]\s(.+)$/);
@@ -448,10 +445,13 @@ function truncateAtDash(text) {
 }
 
 // "Letzte Bearbeitung"/"Stand" date — DD.MM.YYYY → ISO, wins over an Auflage year
+// pad a number token to two digits ("5" → "05")
+function two(n) { return ('0' + n).slice(-2); }
+
 function setWorkDate(item, value) {
 	if (!value) return;
 	var m = value.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
-	if (m) item.date = m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
+	if (m) item.date = m[3] + '-' + two(m[2]) + '-' + two(m[1]);
 	else item.date = value;
 }
 
