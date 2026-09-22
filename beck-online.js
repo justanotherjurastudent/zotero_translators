@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2026-09-19 01:00:00"
+	"lastUpdated": "2026-09-22 10:10:00"
 }
 
 /*
@@ -75,9 +75,32 @@ var authorTitlesEtc = ['\\/',
 var authorRegEx = new RegExp(authorTitlesEtc.join('|'), 'g');
 
 
+// the "Gesamte Vorschrift" link or norm classes mark a law (Gesetz)
+function isStatute(doc) {
+	var link = doc.getElementById("dokgesamtansichtlink");
+	if (link && link.textContent.includes("Gesamte Vorschrift")) {
+		return true;
+	}
+	var dok = doc.getElementById("dokument");
+	if (dok && dok.className && /\b(gesparagr|gesetz)\b/i.test(dok.className)) {
+		return true;
+	}
+	var dokcontent = doc.getElementById("dokcontent");
+	if (dokcontent) {
+		var filename = dokcontent.getAttribute("data-filename") || "";
+		if (/[\\/]ges[\\/]/i.test(filename)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 function detectWeb(doc, _url) {
 	var dokument = doc.getElementById("dokument");
 	if (!dokument) {
+		if (isStatute(doc)) {
+			return "statute";
+		}
 		return getSearchResults(doc, true) ? "multiple" : false;
 	}
 	
@@ -85,6 +108,10 @@ function detectWeb(doc, _url) {
 	// Z.debug(dokument.className.toUpperCase());
 	if (type == 'multiple') {
 		return getSearchResults(doc, true) ? "multiple" : false;
+	}
+	
+	if (!type && isStatute(doc)) {
+		return "statute";
 	}
 	
 	return type;
@@ -191,7 +218,7 @@ function scrapeKommentar(doc, url) {
 				item.creators.push(ZU.cleanAuthor(ZU.trimInternal(gesamtHrsgEditors[i]), 'editor', false));
 			}
 		}
-		else if (editionText.search(/\d+/) > -1) {
+		else if (/\d+/.test(editionText)) {
 			item.edition = editionText.match(/\d+/)[0];
 		}
 		else {
@@ -505,6 +532,10 @@ function scrape(doc, url) {
 		scrapeKommentar(doc, url);
 		return;
 	}
+	if (isStatute(doc)) {
+		scrapeStatute(doc, url);
+		return;
+	}
 
 	var item;
 	if (mappingClassNameToItemType[documentClassName]) {
@@ -573,7 +604,7 @@ function scrape(doc, url) {
 
 	if (issueText) {
 		item.issue = issueText.replace(/\([^)]*\)/, "");
-		if (item.issue.search(/\d+/) > -1) {
+		if (/\d+/.test(item.issue)) {
 			item.issue = item.issue.match(/\d+/)[0];
 		}
 	}
@@ -600,6 +631,339 @@ function scrape(doc, url) {
 		item.extra = ZU.xpathText(doc, '//div[@class="biblio"]');
 	}
 	
+	finalize(doc, url, item);
+}
+
+function cleanNodeText(node) {
+	if (!node) return "";
+	var clone = node.cloneNode(true);
+	var toRemove = clone.querySelectorAll('.unsichtbar, .comment, .parnrdpk, sup, script, style');
+	for (var i = 0; i < toRemove.length; i++) {
+		toRemove[i].remove();
+	}
+	return ZU.trimInternal(clone.textContent);
+}
+
+function parseGermanDate(str) {
+	if (!str || /ausgewertet bis|Verk[üu]ndungsblatt ausgewertet|Auswertungsstand/i.test(str)) {
+		return null;
+	}
+	var monthMap = {
+		januar: "01", jan: "01",
+		februar: "02", feb: "02",
+		märz: "03", maerz: "03", mrz: "03", mär: "03",
+		april: "04", apr: "04",
+		mai: "05",
+		juni: "06", jun: "06",
+		juli: "07", jul: "07",
+		august: "08", aug: "08",
+		september: "09", sep: "09", sept: "09",
+		oktober: "10", okt: "10",
+		november: "11", nov: "11",
+		dezember: "12", dez: "12"
+	};
+
+	// 1. Date with "vom" or "v." (e.g. "... vom 14. September 2022 ...")
+	var mVom = str.match(/\b(?:vom|v\.)\s+(\d{1,2})\.\s*([A-Za-zäöüÄÖÜß]+)\.?\s*(\d{4})\b/i);
+	if (mVom) {
+		var mStrVom = mVom[2].toLowerCase();
+		if (monthMap[mStrVom]) {
+			var dayVom = mVom[1].length === 1 ? "0" + mVom[1] : mVom[1];
+			return dayVom + "." + monthMap[mStrVom] + "." + mVom[3];
+		}
+	}
+
+	var mVomNum = str.match(/\b(?:vom|v\.)\s+(\d{1,2})\.(\d{1,2})\.(\d{4})\b/);
+	if (mVomNum) {
+		var dV = mVomNum[1].length === 1 ? "0" + mVomNum[1] : mVomNum[1];
+		var mV = mVomNum[2].length === 1 ? "0" + mVomNum[2] : mVomNum[2];
+		return dV + "." + mV + "." + mVomNum[3];
+	}
+
+	// 2. General date with month name (e.g. "20. Mai 2014")
+	var mWord = str.match(/(\d{1,2})\.\s*([A-Za-zäöüÄÖÜß]+)\.?\s*(\d{4})/i);
+	if (mWord) {
+		var mStr = mWord[2].toLowerCase();
+		if (monthMap[mStr]) {
+			var day = mWord[1].length === 1 ? "0" + mWord[1] : mWord[1];
+			return day + "." + monthMap[mStr] + "." + mWord[3];
+		}
+	}
+
+	// 3. General numeric date (e.g. "01.01.2002")
+	var mNum = str.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
+	if (mNum) {
+		var d = mNum[1].length === 1 ? "0" + mNum[1] : mNum[1];
+		var m = mNum[2].length === 1 ? "0" + mNum[2] : mNum[2];
+		return d + "." + m + "." + mNum[3];
+	}
+
+	return null;
+}
+
+// laws (Gesetze)
+function scrapeStatute(doc, url) {
+	var item = new Zotero.Item("statute");
+
+	// 1. Name des Erlasses (nameOfAct) and Kurztitel (shortTitle)
+	var h1TitleElem = doc.querySelector('h1.title');
+	var ltitleElem = doc.querySelector('h1.title .ltitle') || doc.querySelector('.ltitle');
+	var regabbrevElem = doc.querySelector('h1.title .regabbrev') || doc.querySelector('.regabbrev');
+
+	var ltitle = ltitleElem ? cleanNodeText(ltitleElem) : null;
+	var regabbrev = regabbrevElem ? cleanNodeText(regabbrevElem) : null;
+
+	// If no explicit .ltitle, check h1.title directly
+	if (!ltitle && h1TitleElem) {
+		var clone = h1TitleElem.cloneNode(true);
+		var regChild = clone.querySelector('.regabbrev');
+		if (regChild) {
+			regChild.remove();
+		}
+		ltitle = cleanNodeText(clone);
+	}
+
+	var nameOfAct = ltitle;
+	var shortTitle = regabbrev;
+
+	// Check norm table in .dk2table
+	var abkElem = doc.querySelector('.dk2table table tr:not(.bf_desc) td:nth-child(1) span.abk')
+		|| doc.querySelector('.dk2table table tr:nth-child(2) td:nth-child(1)');
+	var gesElem = doc.querySelector('.dk2table table tr:not(.bf_desc) td:nth-child(2) span.ges')
+		|| doc.querySelector('.dk2table table tr:nth-child(2) td:nth-child(2)');
+
+	var abk = abkElem ? cleanNodeText(abkElem) : null;
+	var ges = gesElem ? cleanNodeText(gesElem) : null;
+
+	if (!shortTitle && abk) {
+		shortTitle = abk;
+	}
+
+	if (!nameOfAct && ges) {
+		nameOfAct = ges.replace(/^\[\s*|\s*\]$/g, "").trim();
+	}
+
+	if (!nameOfAct) {
+		var titleNode = doc.querySelector('title');
+		if (titleNode && titleNode.textContent) {
+			nameOfAct = ZU.trimInternal(titleNode.textContent.replace(/\s*-\s*beck-online.*$/i, ""));
+		}
+	}
+
+	if (nameOfAct) {
+		item.nameOfAct = nameOfAct;
+		item.title = nameOfAct;
+	}
+	if (shortTitle) {
+		item.shortTitle = shortTitle;
+	}
+
+	// 2. Section (e.g. § 433, § 13, Art. 5)
+	var sectionCandidate = null;
+	var paragrHeading = doc.querySelector('h2.paragr .paragr')
+		|| doc.querySelector('h2.paragr');
+	if (paragrHeading && paragrHeading.textContent) {
+		sectionCandidate = cleanNodeText(paragrHeading);
+	}
+	if (!sectionCandidate) {
+		var parnrElem = doc.querySelector('span.parnr');
+		if (parnrElem && parnrElem.textContent) {
+			sectionCandidate = cleanNodeText(parnrElem);
+		}
+	}
+	if (sectionCandidate) {
+		var mPar = sectionCandidate.match(/(?:§+|Art(?:ikel)?\.?)\s*\d+\s*[a-z]?/i);
+		if (mPar) {
+			item.section = ZU.trimInternal(mPar[0]);
+		}
+		else {
+			item.section = ZU.trimInternal(sectionCandidate.replace(/^[:,\s]+|[:,\s]+$/g, ""));
+		}
+	}
+
+	// 3. Datum des Inkrafttretens / Date Enacted
+	var signdateElem = doc.querySelector('h3.signdate');
+	var dateEnacted = null;
+	if (signdateElem && signdateElem.textContent) {
+		dateEnacted = parseGermanDate(cleanNodeText(signdateElem));
+	}
+
+	// If no signdate, check h1.title (e.g. EU regulations: "... vom 14. September 2022 über ...")
+	if (!dateEnacted && h1TitleElem && h1TitleElem.textContent) {
+		dateEnacted = parseGermanDate(cleanNodeText(h1TitleElem));
+	}
+
+	if (!dateEnacted) {
+		var titleElem = doc.querySelector('title');
+		if (titleElem && titleElem.textContent) {
+			dateEnacted = parseGermanDate(cleanNodeText(titleElem));
+		}
+	}
+
+	// Fallback for dateEnacted: span.ikdate_akt (e.g. "Text gilt ab 01.01.2002" in BGB § 433)
+	// (Note: Do NOT match vkdate or "Verkündungsblatt ausgewertet bis", which is editorial status)
+	if (!dateEnacted) {
+		var ikElem = doc.querySelector('span.ikdate_akt')
+			|| doc.querySelector('span.ikdate');
+		if (ikElem && ikElem.textContent) {
+			dateEnacted = parseGermanDate(cleanNodeText(ikElem));
+		}
+		else {
+			var ikText = ZU.xpathText(doc, '//*[contains(text(), "Text gilt")]');
+			if (ikText) {
+				dateEnacted = parseGermanDate(ikText);
+			}
+		}
+	}
+	if (dateEnacted) {
+		item.dateEnacted = dateEnacted;
+	}
+
+	// 4. Fundstelle / pubref
+	var pubrefElems = doc.querySelectorAll('h4.pubref');
+	var pubrefTarget = null;
+	for (var i = 0; i < pubrefElems.length; i++) {
+		var pText = cleanNodeText(pubrefElems[i]);
+		if (/(?:BGBl|RGBl|BAnz|BStBl|GVBl|GBl|GV\.\s*NRW|BayGVBl|Nds\.\s*GVBl|BWGBl|ABl|BBl|AS|LGBl|S\.\s*\d+)/i.test(pText)) {
+			pubrefTarget = pText;
+			break;
+		}
+	}
+	if (!pubrefTarget && pubrefElems.length > 0) {
+		pubrefTarget = cleanNodeText(pubrefElems[0]);
+	}
+
+	if (pubrefTarget) {
+		var firstPub = pubrefTarget.split(';')[0].trim();
+		firstPub = firstPub.replace(/^\s*\(|\)\s*$/g, '').trim();
+
+		var code = null;
+		var codeNumber = null;
+		var pages = null;
+		var pubYear = null;
+		var publicLawNumber = null;
+
+		var rest = firstPub;
+
+		// BGBl / RGBl / BStBl
+		var mBgbl = rest.match(/^(BGBl|RGBl|BStBl)\.?(?:\s*(\d{4}))?\s*(?:(Teil\s*I{1,3}|I{1,3}))?/i);
+		if (mBgbl && (mBgbl[1] || mBgbl[3])) {
+			var gBase = mBgbl[1].toUpperCase();
+			if (gBase === 'BGBL') {
+				gBase = 'BGBl.';
+			}
+			else if (gBase === 'RGBL') {
+				gBase = 'RGBl.';
+			}
+			else if (gBase === 'BSTBL') {
+				gBase = 'BStBl.';
+			}
+			if (mBgbl[2]) {
+				pubYear = mBgbl[2];
+			}
+			var part = mBgbl[3];
+			code = part ? (gBase + " " + part.toUpperCase()) : gBase;
+			rest = rest.substring(mBgbl[0].length).trim();
+		}
+		else {
+			var mBanz = rest.match(/^(eBAnz\.?|BAnz\.?\s*AT|BAnz\.?)/i);
+			if (mBanz) {
+				var banzName = mBanz[1].trim();
+				if (/AT/i.test(banzName)) {
+					code = 'BAnz. AT';
+				}
+				else if (/^ebanz/i.test(banzName)) {
+					code = 'eBAnz';
+				}
+				else {
+					code = 'BAnz.';
+				}
+				rest = rest.substring(mBanz[0].length).trim();
+			}
+			else {
+				var mAbl = rest.match(/^(ABl\.?\s*(?:EG\s*|EU\s*)?([LCS]))/i);
+				if (mAbl) {
+					code = 'ABl. ' + mAbl[2].toUpperCase();
+					rest = rest.substring(mAbl[0].length).trim();
+				}
+				else {
+					var mOther = rest.match(/^(BayGVBl\.?|Nds\.\s*GVBl\.?|GV\.\s*NRW\.?|BWGBl\.?|GBl\.\s*BW|BBl\.?|AS|LGBl\.?(?:\s*[A-ZÄÖÜa-zäöü.-]+)?|[A-Za-zÄÖÜäöü.]*(?:GVBl|GBl)\.?(?:\s*[A-ZÄÖÜa-zäöü.-]+)?)/i);
+					if (mOther) {
+						code = mOther[1].trim().replace(/\s+(?:Nr\.?|vom)$/i, '');
+						rest = rest.substring(mOther[0].length).trim();
+					}
+					else {
+						var mFb = rest.match(/^([^0-9,;]+)/);
+						if (mFb) {
+							code = mFb[1].trim();
+							rest = rest.substring(mFb[0].length).trim();
+						}
+					}
+				}
+			}
+		}
+
+		if (code) {
+			code = code.replace(/[,;]+$/, '').trim();
+			item.code = code;
+		}
+
+		rest = rest.replace(/^,\s*/, '');
+		var mPage = rest.match(/(?:S\.|Seite)\s*(\d+(?:\s*[-–]\s*\d+)?)/i);
+		if (mPage) {
+			pages = mPage[1].replace(/\s+/g, "");
+			var before = rest.substring(0, mPage.index).trim();
+			before = before.replace(/,\s*$/, "").trim();
+			if (before) {
+				if (/^\d{4}$/.test(before)) {
+					pubYear = before;
+				}
+				else if (/^(?:Nr\.?\s*)?[0-9]+(?:[-/][0-9]+)?$/i.test(before)) {
+					codeNumber = before.replace(/^Nr\.?\s*/i, "");
+				}
+			}
+		}
+		else {
+			var mPageComma = rest.match(/(?:^|,\s*|\s+)(\d{4})?,\s*(\d+(?:\s*[-–]\s*\d+)?)/);
+			if (mPageComma) {
+				if (mPageComma[1]) {
+					pubYear = mPageComma[1];
+				}
+				pages = mPageComma[2].replace(/\s+/g, '');
+			}
+			else {
+				var mNr = rest.match(/Nr\.?\s*([^\s,;]+)/i);
+				if (mNr) {
+					publicLawNumber = mNr[1];
+				}
+				var mTwo = rest.match(/(\d{4})\s+(\d+)/);
+				if (mTwo) {
+					pubYear = mTwo[1];
+					pages = mTwo[2];
+				}
+				else {
+					var mOne = rest.match(/\b(\d+)\b/);
+					if (mOne) {
+						pages = mOne[1];
+					}
+				}
+			}
+		}
+
+		if (pages) {
+			item.pages = pages;
+		}
+		if (codeNumber) {
+			item.codeNumber = codeNumber;
+		}
+		if (publicLawNumber) {
+			item.publicLawNumber = publicLawNumber;
+		}
+		if (pubYear && !item.dateEnacted) {
+			item.dateEnacted = pubYear;
+		}
+	}
+
 	finalize(doc, url, item);
 }
 
@@ -692,6 +1056,7 @@ function finalize(doc, url, item) {
 	
 	item.complete();
 }
+
 /** BEGIN TEST CASES **/
 var testCases = [
 	{
