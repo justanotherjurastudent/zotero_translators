@@ -9,8 +9,9 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2026-09-20 20:15:00"
+	"lastUpdated": "2026-09-22 18:16:02"
 }
+
 
 /*
 	***** BEGIN LICENSE BLOCK *****
@@ -999,9 +1000,6 @@ var testCases = [
 				"itemType": "case",
 				"caseName": "BauR 2026, 1601 Ausschluss fossiler Brennstoffe in einem Bebauungsplan",
 				"creators": [],
-				"dateDecided": "2026-03-09",
-				"court": "Nieders. OVG",
-				"docketNumber": "1 KN 40/22",
 				"firstPage": "1601",
 				"reporter": "BauR",
 				"reporterVolume": "2026",
