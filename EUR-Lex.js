@@ -9,8 +9,9 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2026-09-18 10:00:00"
+	"lastUpdated": "2026-09-22 18:15:26"
 }
+
 
 /*
 	***** BEGIN LICENSE BLOCK *****
@@ -93,17 +94,8 @@ function getSearchResults(doc, checkOnly) {
 }
 
 
-// we need to remember the language in search page to use the same for
-// individual entry page
-var autoLanguage;
-
-
 function doWeb(doc, url) {
 	if (detectWeb(doc, url) == "multiple") {
-		var m = url.match(/\blocale=([a-z][a-z])/);
-		if (m) {
-			autoLanguage = m[1];
-		}
 		Zotero.selectItems(getSearchResults(doc, false), function (items) {
 			if (items) ZU.processDocuments(Object.keys(items), scrape);
 		});
@@ -230,7 +222,10 @@ function scrape(doc, url) {
 			}
 		}
 		else { // Orders, summaries, etc.
-			item.caseName = attr(doc, 'meta[name="WT.z_docTitle"]', "content").replace(/#/g, " ").replace(/\s+/g, " ").trim();
+			item.caseName = attr(doc, 'meta[name="WT.z_docTitle"]', "content")
+				.replace(/#/g, " ")
+				.replace(/\s+/g, " ")
+				.trim();
 			item.dateDecided = celex.substr(1, 4);
 		}
 		
@@ -252,16 +247,16 @@ function scrape(doc, url) {
 		var months = {
 			januar: '01', january: '01', janvier: '01',
 			februar: '02', february: '02', février: '02', fevrier: '02',
-			'märz': '03', maerz: '03', maart: '03', march: '03', mars: '03',
+			märz: '03', maerz: '03', maart: '03', march: '03', mars: '03',
 			april: '04', avril: '04',
 			mai: '05', may: '05',
 			juni: '06', june: '06', juin: '06',
 			juli: '07', july: '07', juillet: '07',
-			august: '08', augustus: '08', 'août': '08', aout: '08',
+			august: '08', augustus: '08', août: '08', aout: '08',
 			september: '09', septembre: '09', settembre: '09',
 			oktober: '10', october: '10',
 			november: '11', novembre: '11',
-			dezember: '12', december: '12', 'décembre': '12', decembre: '12'
+			dezember: '12', december: '12', décembre: '12', decembre: '12'
 		};
 		// only fall back to the document text if the header has no full date,
 		// otherwise dates of cited cases in the text would be picked up
