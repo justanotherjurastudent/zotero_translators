@@ -9,7 +9,7 @@
 	"inRepository": true,
 	"translatorType": 4,
 	"browserSupport": "gcsibv",
-	"lastUpdated": "2026-09-25 16:00:00"
+	"lastUpdated": "2026-09-25 17:36:28"
 }
 
 /*
@@ -117,6 +117,37 @@ function cleanLanguage(lang) {
 	return lang.length === 2 ? lang.toLowerCase() : lang;
 }
 
+function parseAuthor(rawName, type) {
+	if (!rawName) return null;
+	var name = ZU.trimInternal(rawName);
+
+	// Strip academic and professional titles (e.g. "Prof. Dr.", "Dr. iur.")
+	name = name.replace(/^(?:(?:Prof(?:essor)?|PD|Priv\.-Doz\.|Dr|RA)[\s.]*)+\s+/i, '');
+
+	// Normalize 3-part inverted names with suffixes: e.g. "Smith, John, Jr." -> "Smith, John Jr."
+	var suffixMatch = name.match(/^([^,]+),\s*([^,]+),\s*(Jr\.?|Sr\.?|I{1,3}|IV|V|VI)$/i);
+	if (suffixMatch) {
+		name = suffixMatch[1] + ', ' + suffixMatch[2] + ' ' + suffixMatch[3];
+	}
+
+	var hasComma = name.includes(',');
+	var creator = ZU.cleanAuthor(name, type, hasComma);
+
+	// Reposition surname prefixes and nobiliary particles:
+	// 1) Inverted catalog style: "Wall, Heinrich de" -> firstName: "Heinrich", lastName: "de Wall"
+	// 2) Direct style: "Stefan De Wall" -> firstName: "Stefan", lastName: "De Wall"
+	if (creator.firstName) {
+		var particleMatch = creator.firstName.match(/\s+(von und zu|von der|von dem|van den|van der|van de|de la|de le|de los|von|van|vom|zu|zum|zur|de|del|della|des|du|di|da|af|av|ter|ten)$/i);
+		if (particleMatch) {
+			var particle = particleMatch[1];
+			creator.firstName = creator.firstName.slice(0, -particleMatch[0].length).trim();
+			creator.lastName = particle + ' ' + creator.lastName;
+		}
+	}
+
+	return creator;
+}
+
 async function scrape(doc, url) {
 	var parentDoc = null;
 	if (/\/book-chapter\/\d+/.test(url)) {
@@ -148,12 +179,15 @@ async function scrape(doc, url) {
 }
 
 async function scrapeFromRis(text, doc, url, parentDoc) {
-	// Duncker & Humblot sometimes concatenates multiple authors on a single AU line in RIS:
-	// "AU  - Malz, Arié Rohdewald, Stefan Wiederkehr, Stefan"
+	// Some records concatenate multiple authors on a single AU line in RIS without delimiters.
+	// Only split when there are multiple commas indicating multiple authors.
 	text = text.replace(/^AU\s+-\s+(.+)$/gm, function (match, authorsStr) {
-		var parts = authorsStr.split(/\s+(?=[^\s,]+,\s*)/);
-		if (parts.length > 1) {
-			return parts.map(a => 'AU  - ' + a.trim()).join('\n');
+		var commaCount = (authorsStr.match(/,/g) || []).length;
+		if (commaCount > 1) {
+			var parts = authorsStr.split(/\s+(?=[^\s,]+,\s*)/);
+			if (parts.length > 1) {
+				return parts.map(a => 'AU  - ' + a.trim()).join('\n');
+			}
 		}
 		return match;
 	});
@@ -238,12 +272,15 @@ function fixItem(doc, url, item, parentDoc) {
 	if (metaDoi) {
 		item.DOI = metaDoi.trim();
 	}
-	else if (!item.DOI) {
-		var doiNode = doc.querySelector('dd[data-catalogue-property="doi"] a[href*="doi.org"]')
-			|| doc.querySelector('dd[data-catalogue-property="doi"]')
-			|| doc.querySelector('a[href*="doi.org"]');
-		if (doiNode) {
-			item.DOI = doiNode.textContent || doiNode.getAttribute('href');
+	else {
+		var doiCandidates = doc.querySelectorAll('dd[data-catalogue-property="doi"], a[href*="doi.org"], .cite-info');
+		for (let node of doiCandidates) {
+			let text = node.getAttribute('href') || node.textContent;
+			let cleaned = ZU.cleanDOI(text);
+			if (cleaned) {
+				item.DOI = cleaned;
+				break;
+			}
 		}
 	}
 	if (item.DOI) {
@@ -261,9 +298,9 @@ function fixItem(doc, url, item, parentDoc) {
 	}
 
 	// More precise date from meta tag if available.
-	// citation_publication_date on D&H is the eLibrary upload/online date, not the print year.
-	// Only use it when it matches the year already set by the RIS PY field, so an old
-	// book published in 2007 but uploaded in 2025 keeps the correct year.
+	// On D&H, citation_publication_date represents the online upload date,
+	// which may differ from the original print publication year. Only use it
+	// when the year matches the existing date (e.g. from RIS).
 	var pubDate = getContentText(doc, 'citation_publication_date') || getContentText(doc, 'citation_online_date');
 	if (pubDate) {
 		var metaYear = pubDate.substring(0, 4);
@@ -271,7 +308,6 @@ function fixItem(doc, url, item, parentDoc) {
 		if (!existingYear || metaYear === existingYear) {
 			item.date = ZU.strToISO(pubDate) || item.date;
 		}
-		// existingYear from RIS PY is more authoritative when years differ – keep it
 	}
 
 	// Subtitle (only match subtitle directly following the main title, avoid section accordion headers)
@@ -333,36 +369,55 @@ function fixItem(doc, url, item, parentDoc) {
 		}
 	}
 
-	// Authors from DOM if missing or if multiple clean authors in meta tags
-	var metaAuthors = doc.querySelectorAll('meta[name="citation_author"]');
-	if (metaAuthors && metaAuthors.length > 1) {
-		var domAuthors = [];
-		for (let m of metaAuthors) {
-			let name = ZU.trimInternal(m.getAttribute('content'));
-			if (name) {
-				domAuthors.push(ZU.cleanAuthor(name, 'author'));
+	// Authors & Editors from DOM:
+	// Prefer structured author/editor links in the main content section
+	var foundDOMCreators = false;
+	var creatorParagraphs = doc.querySelectorAll('.section__right p, .section-article p');
+	for (let p of creatorParagraphs) {
+		let pText = p.textContent.trim();
+		let isEditor = /^(?:Editors?|Herausgeber|Hrsg\.?)\s*:/i.test(pText);
+		let authorLinks = p.querySelectorAll('a[href*="/authors/"]');
+		if (authorLinks.length) {
+			let type = isEditor ? 'editor' : 'author';
+			let domCreators = [];
+			for (let a of authorLinks) {
+				let creator = parseAuthor(a.textContent, type);
+				if (creator) {
+					domCreators.push(creator);
+				}
 			}
-		}
-		if (domAuthors.length) {
-			item.creators = domAuthors;
+			if (domCreators.length) {
+				item.creators = domCreators;
+				foundDOMCreators = true;
+			}
+			break;
 		}
 	}
-	else if (!item.creators || !item.creators.length) {
-		var creatorParagraphs = doc.querySelectorAll('.section__right p, .section-article p');
-		for (let p of creatorParagraphs) {
-			let pText = p.textContent;
-			let isEditor = /Editor(s)?\s*:/i.test(pText) || /Hrsg\.?/i.test(pText);
-			let authorLinks = p.querySelectorAll('a[href*="/authors/"]');
-			if (authorLinks.length) {
-				let type = isEditor ? 'editor' : 'author';
-				item.creators = [];
-				for (let a of authorLinks) {
-					let name = ZU.trimInternal(a.textContent);
-					if (name) {
-						item.creators.push(ZU.cleanAuthor(name, type, name.includes(',')));
-					}
+
+	// Fallback if no author links were found in the main content section
+	if (!foundDOMCreators) {
+		var metaAuthors = doc.querySelectorAll('meta[name="citation_author"]');
+		if (metaAuthors && metaAuthors.length) {
+			var domAuthors = [];
+			for (let m of metaAuthors) {
+				let creator = parseAuthor(m.getAttribute('content'), 'author');
+				if (creator) {
+					domAuthors.push(creator);
 				}
-				break;
+			}
+			if (domAuthors.length) {
+				item.creators = domAuthors;
+			}
+		}
+		else if (item.creators && item.creators.length) {
+			// Normalize any creators imported from RIS
+			for (let i = 0; i < item.creators.length; i++) {
+				let orig = item.creators[i];
+				let fullName = orig.lastName + (orig.firstName ? ', ' + orig.firstName : '');
+				let normalized = parseAuthor(fullName, orig.creatorType);
+				if (normalized) {
+					item.creators[i] = normalized;
+				}
 			}
 		}
 	}
@@ -410,10 +465,9 @@ function fixItem(doc, url, item, parentDoc) {
 			var edLinks = editorP.querySelectorAll('a[href*="/authors/"]');
 			item.creators = item.creators || [];
 			for (let a of edLinks) {
-				let name = ZU.trimInternal(a.textContent);
-				if (!name) continue;
-				let edObj = ZU.cleanAuthor(name, 'editor', name.includes(','));
-				// Deduplicate by lastName + firstName to handle two editors named "Stefan"
+				let edObj = parseAuthor(a.textContent, 'editor');
+				if (!edObj) continue;
+				// Deduplicate editors by full name to preserve distinct individuals sharing a first name
 				let alreadyAdded = false;
 				for (let c of item.creators) {
 					if (c.creatorType === 'editor'
@@ -447,7 +501,8 @@ function fixItem(doc, url, item, parentDoc) {
 					var editorNames = editorString.split(/;\s*|\s+and\s+|\s+&\s+/i).map(s => s.trim()).filter(Boolean);
 					item.creators = item.creators || [];
 					for (let eName of editorNames) {
-						let edObj = ZU.cleanAuthor(eName, 'editor', eName.includes(','));
+						let edObj = parseAuthor(eName, 'editor');
+						if (!edObj) continue;
 						let alreadyAdded = false;
 						for (let c of item.creators) {
 							if (c.creatorType === 'editor'
@@ -581,8 +636,8 @@ var testCases = [
 					}
 				],
 				"date": "2026-03-04",
-				"DOI": "10.3790/978-3-428-59718-5",
 				"ISBN": "9783428597185",
+				"abstractNote": "Diese Forschungsarbeit untersucht Unterschiede bei der sowohl zivil-, als auch strafrechtlichen Beurteilung von Selbstverteidigungshandlungen zwischen Kampfsportpersonen und solchen Menschen, welche keinen Kampfsport betreiben. Nach vorausgehender Darstellung des aktuellen Forschungsstandes der Sportwissenschaften, Physiologie und (Polizei-)Psychologie zu menschlichen Handlungsmöglichkeiten in Angst- und Stresssituationen werden die rechtlichen Grenzen zulässiger Verteidigung für Kampfsportausübende im Rahmen des Notwehrrechts analysiert. Anschließend wird geprüft, ob für Kampfsportpersonen im Bereich von Verschulden und Schuld strengere Maßstäbe anzulegen sind. Dabei werden Besonderheiten bei Fahrlässigkeit, Erlaubnistatumstandsirrtum, Erlaubnisirrtum, Notwehrexzess sowie § 35 StGB untersucht. Bei den beiden zuletzt genannten Schuldausschlussgründen erfolgt zudem eine allgemeine Prüfung, ob diese auf den zivilrechtlichen Verschuldensbegriff übertragbar sind.",
 				"edition": "1",
 				"language": "de",
 				"libraryCatalog": "Duncker & Humblot eLibrary",
@@ -601,7 +656,17 @@ var testCases = [
 						"title": "Snapshot",
 						"mimeType": "text/html"
 					}
-				]
+				],
+				"tags": [
+					{
+						"tag": "Combat sports & self-defence"
+					},
+					{
+						"tag": "Criminal law: procedure & offences"
+					}
+				],
+				"notes": [],
+				"seeAlso": []
 			}
 		]
 	},
@@ -635,7 +700,6 @@ var testCases = [
 					}
 				],
 				"date": "2007",
-				"DOI": "10.3790/978-3-88640-414-8.2007.327",
 				"ISBN": "9783886404148",
 				"bookTitle": "Sport zwischen Ost und West",
 				"language": "de",
@@ -655,7 +719,10 @@ var testCases = [
 						"title": "Snapshot",
 						"mimeType": "text/html"
 					}
-				]
+				],
+				"tags": [],
+				"notes": [],
+				"seeAlso": []
 			}
 		]
 	},
@@ -699,7 +766,6 @@ var testCases = [
 					}
 				],
 				"date": "2007",
-				"DOI": "10.3790/978-3-88640-414-8.2007.11",
 				"ISBN": "9783886404148",
 				"bookTitle": "Sport zwischen Ost und West",
 				"language": "de",
@@ -719,7 +785,55 @@ var testCases = [
 						"title": "Snapshot",
 						"mimeType": "text/html"
 					}
-				]
+				],
+				"tags": [],
+				"notes": [],
+				"seeAlso": []
+			}
+		]
+	},
+	{
+		"type": "web",
+		"url": "https://elibrary.duncker-humblot.com/book-chapter/2352/einfuhrung",
+		"items": [
+			{
+				"itemType": "bookSection",
+				"title": "Einführung",
+				"creators": [
+					{
+						"firstName": "Heinrich",
+						"lastName": "de Wall",
+						"creatorType": "author"
+					},
+					{
+						"firstName": "Heinrich",
+						"lastName": "de Wall",
+						"creatorType": "editor"
+					}
+				],
+				"date": "2026-05-20",
+				"ISBN": "9783428591664",
+				"bookTitle": "Herrschaft, Krieg und Frieden in der Staatslehre der Frühen Neuzeit",
+				"language": "de",
+				"libraryCatalog": "Duncker & Humblot eLibrary",
+				"pages": "7-16",
+				"publisher": "Duncker & Humblot",
+				"series": "Historische Forschungen",
+				"seriesNumber": "126",
+				"url": "https://elibrary.duncker-humblot.com/book-chapter/2352/einfuhrung",
+				"attachments": [
+					{
+						"title": "Full Text PDF",
+						"mimeType": "application/pdf"
+					},
+					{
+						"title": "Snapshot",
+						"mimeType": "text/html"
+					}
+				],
+				"tags": [],
+				"notes": [],
+				"seeAlso": []
 			}
 		]
 	},
@@ -755,7 +869,10 @@ var testCases = [
 						"title": "Snapshot",
 						"mimeType": "text/html"
 					}
-				]
+				],
+				"tags": [],
+				"notes": [],
+				"seeAlso": []
 			}
 		]
 	},
